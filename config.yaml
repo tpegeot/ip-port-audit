@@ -1,0 +1,21 @@
+addresses:
+  - ip: 192.168.0.2
+    name: "nas"
+    ports:
+      - tcp/80
+      - tcp/443
+      - tcp/5000
+      - tcp/21-22
+      - tcp/111
+      - tcp/139
+      - tcp/445
+      - tcp/2049
+  - ip: 192.168.1.14
+    name: "pc"
+    ports:
+      - tcp/22
+  - ip: 192.168.0.1
+    name: "box"
+    ports:
+      - tcp/80
+

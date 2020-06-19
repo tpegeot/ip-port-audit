@@ -10,6 +10,7 @@ import logging
 import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
+from ipaddress import IPv4Network, ip_address
 from jinja2 import Environment
 import nmap
 import yaml
@@ -18,17 +19,20 @@ import yaml
 DEFAULT_CONFIG_FILE_PATH = 'config.yaml'
 # Port regex
 VALID_PORT_REGEX = r"^((tcp|udp)\/[0-9]{1,5})$"
+# Port range regeix
 VALID_PORT_RANGE_REGEX = r'^((tcp|udp)\/[0-9]{1,5}\-[0-9]{1,5})$'
 # IP regex
 VALID_IP_REGEX = r"^(([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])\.){3}" \
                  + "([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])$"
-# Not supported yet
-#VALID_NETWORK_REGEX = r"^(([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])\.){3}" \
-#                      + "([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])\\/(8|16|24)$"
-#VALID_IP_RANGE_REGEX = r"^(([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])\.){3}" \
-#                       + "([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])\\-" \
-#                       + "(([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])\\.){3}" \
-#                       + "([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])$"
+# IP network regex
+# Only /8, /16 and /24 are supported at the moment
+VALID_NETWORK_REGEX = r"^(([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])\.){3}" \
+                      + "([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])\\/(8|16|24)$"
+# IP range regex
+VALID_IP_RANGE_REGEX = r"^(([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])\.){3}" \
+                       + "([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])\\-" \
+                       + "(([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])\\.){3}" \
+                       + "([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])$"
 
 
 def init_log():
@@ -165,6 +169,8 @@ def check_address_syntax(addresses, parent_logger):
     """
     is_syntax_valid = True
     ip_regex = re.compile(VALID_IP_REGEX)
+    network_ip_regex = re.compile(VALID_NETWORK_REGEX)
+    range_ip_regex = re.compile((VALID_IP_RANGE_REGEX))
 
     if addresses:
         # Iterate through ip addresses
@@ -174,11 +180,13 @@ def check_address_syntax(addresses, parent_logger):
             if "ip" in address:
 
                 # Check if ip matches ip regex
-                if ip_regex.match(address["ip"]):
+                if ip_regex.match(address["ip"])\
+                        or network_ip_regex.match(address["ip"])\
+                        or range_ip_regex.match(address["ip"]):
                     if not check_port_syntax(address, parent_logger):
                         is_syntax_valid = False
                 else:
-                    parent_logger.warn(address["ip"] + ' syntax is incorrect')
+                    parent_logger.warning(address["ip"] + ' syntax is incorrect')
                     is_syntax_valid = False
             else:
                 is_syntax_valid = False
@@ -208,6 +216,58 @@ def expand_port_list(ports):
         else:
             expanded_port_list.append(port_)
     return expanded_port_list
+
+
+def expand_ip_list(addresses):
+    """
+    Function to expand IP list / IP subnet to single IP addresses
+    :param addresses:
+    :type addresses:
+    """
+    # Regex
+    network_ip_regex = re.compile(VALID_NETWORK_REGEX)
+    range_ip_regex = re.compile(VALID_IP_RANGE_REGEX)
+    ip_regex = re.compile(VALID_IP_REGEX)
+    for address in addresses:
+        # If ip address is really an ip address
+        if "ip" in address and ip_regex.match(address["ip"]):
+            if "ports" in address:
+                # Expand port list to single ports
+                # 21-23 => 21, 22, 23
+                address["ports"] = expand_port_list(address["ports"])
+        # If ip address is actually an ip network
+        # Then expand it in single IP address
+        if "ip" in address and network_ip_regex.match(address["ip"]):
+            # Browse through the ip network using IPv4Network
+            for ipv4_address in IPv4Network(address["ip"]):
+                expanded_ip_address = {"ip": str(ipv4_address)}
+                if "name" in address:
+                    expanded_ip_address["name"] = address["name"]
+                # Expand port list to single ports
+                # 21-23 => 21, 22, 23
+                if "ports" in address:
+                    expanded_ip_address["ports"] = expand_port_list(address["ports"])
+                addresses.append(expanded_ip_address)
+            addresses.remove(address)
+        # If ip address is actually a ip range
+        # Then expand it in single IP address
+        if "ip" in address and range_ip_regex.match(address["ip"]):
+            # Use ip_address to convert start of ip range to int
+            extracted_ip_start = int(ip_address(address["ip"].split('-')[0]))
+            # Use ip_address to convert end of ip range to int
+            extracted_ip_end = int(ip_address(address["ip"].split('-')[1])+1)
+            # Having int allows us to use range :
+            # For inclusive range, we added +1 above
+            for ip_from_range in range(extracted_ip_start, extracted_ip_end):
+                expanded_ip_address = {"ip": str(ip_address(ip_from_range))}
+                if "name" in address:
+                    expanded_ip_address["name"] = address["name"]
+                if "ports" in address:
+                    # Expand port list to single ports
+                    # 21-23 => 21, 22, 23
+                    expanded_ip_address["ports"] = expand_port_list(address["ports"])
+                addresses.append(expanded_ip_address)
+            addresses.remove(address)
 
 
 def scan_and_compare(addresses, parent_logger):
@@ -253,11 +313,12 @@ def scan_and_compare(addresses, parent_logger):
                             # Store results
                             scanned_ports.append(protocol + '/' + str(port))
 
-                    expanded_ports = expand_port_list(address["ports"])
                     # Check if more open ports than defined in baseline
-                    missing_ports_from_baseline = [x for x in scanned_ports if x not in expanded_ports]
+                    missing_ports_from_baseline = [x for x in scanned_ports
+                                                   if x not in address["ports"]]
                     # Check if Ports defined in baseline are not open any more
-                    missing_ports_from_scan = [x for x in expanded_ports if x not in scanned_ports]
+                    missing_ports_from_scan = [x for x in address["ports"]
+                                               if x not in scanned_ports]
 
                     # If delta exists, store results by ip
                     if missing_ports_from_baseline:
@@ -401,6 +462,8 @@ def main():
         # if not, exit
         logs.error('File syntax is incorrect')
         sys.exit(os.EX_DATAERR)
+
+    expand_ip_list(data["addresses"])
 
     # Run scans and get results
     scan_results_open_ports, scan_results_closed_ports = scan_and_compare(data["addresses"], logs)

@@ -10,7 +10,7 @@ addresses:
       - tcp/139
       - tcp/445
       - tcp/2049
-  - ip: 192.168.1.14
+  - ip: 192.168.0.14
     name: "pc"
     ports:
       - tcp/22
@@ -18,4 +18,7 @@ addresses:
     name: "box"
     ports:
       - tcp/80
-
+  - ip: 192.168.1.0/24
+    name: "dmz"
+    ports:
+      - tcp/80
